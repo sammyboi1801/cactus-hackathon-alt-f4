@@ -1,121 +1,399 @@
 import 'package:flutter/material.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const FileChatApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class FileChatApp extends StatelessWidget {
+  const FileChatApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Altf4 Workspace',
+      debugShowCheckedModeBanner: false,
+      // 1. Set the overall app theme to Dark Mode
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF121212), // Deep background
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF6366F1), // Slightly lighter Indigo for dark mode
+          brightness: Brightness.dark,
+        ),
+        fontFamily: 'Roboto',
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const ChatLayoutScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class ChatLayoutScreen extends StatefulWidget {
+  const ChatLayoutScreen({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<ChatLayoutScreen> createState() => _ChatLayoutScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
+  final TextEditingController _textController = TextEditingController();
+  final List<Map<String, dynamic>> _messages = [];
 
-  void _incrementCounter() {
+  void _handleSubmitted(String text) {
+    if (text.trim().isEmpty) return;
+
+    _textController.clear();
+
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _messages.add({
+        'isUser': true,
+        'text': text,
+        'type': 'text',
+      });
+
+      if (text.toLowerCase().contains('image')) {
+        _messages.add({
+          'isUser': false,
+          'text': 'I found this image in your "Design" folder:',
+          'type': 'image',
+          'fileName': 'hero_background.png',
+          'fileSize': '2.4 MB',
+        });
+      } else {
+        _messages.add({
+          'isUser': false,
+          'text': 'Here is the document you requested:',
+          'type': 'file',
+          'fileName': 'Q3_Financial_Report.pdf',
+          'fileSize': '845 KB',
+        });
+      }
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
+  // ==============================
+  // SIDEBAR WIDGET (DARK)
+  // ==============================
+  Widget _buildSidebar() {
+    return Container(
+      width: 260,
+      decoration: const BoxDecoration(
+        color: Color(0xFF1E1E1E), // Elevated dark surface
+        border: Border(
+          right: BorderSide(color: Color(0xFF333333), width: 1), // Subtle dark border
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.only(top: 40, left: 24, right: 24, bottom: 24),
+            alignment: Alignment.centerLeft,
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.hub, color: Colors.white, size: 20),
+                ),
+                const SizedBox(width: 12),
+                const Text(
+                  'Altf4 Space',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0),
+              children: [
+                _buildSidebarItem(Icons.folder_open, 'All Projects', true),
+                _buildSidebarItem(Icons.image_outlined, 'Assets & Images', false),
+                _buildSidebarItem(Icons.description_outlined, 'Documents', false),
+                _buildSidebarItem(Icons.code, 'Source Code', false),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.all(16.0),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFF333333))),
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: Colors.grey.shade800,
+                  child: const Icon(Icons.person, color: Colors.grey),
+                ),
+                const SizedBox(width: 12),
+                const Text('Admin User', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebarItem(IconData icon, String title, bool isSelected) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 4),
+      decoration: BoxDecoration(
+        color: isSelected ? const Color(0xFF2D2D30) : Colors.transparent, // Highlight color
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: isSelected ? Colors.white : Colors.grey.shade400, size: 22),
+        title: Text(
+          title,
+          style: TextStyle(
+            color: isSelected ? Colors.white : Colors.grey.shade400,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+            fontSize: 14,
+          ),
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        onTap: () {},
+      ),
+    );
+  }
+
+  // ==============================
+  // MAIN BUILD METHOD
+  // ==============================
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 800;
+
+    return Scaffold(
+      appBar: isMobile
+          ? AppBar(
+              backgroundColor: const Color(0xFF1E1E1E),
+              surfaceTintColor: Colors.transparent,
+              elevation: 0,
+              bottom: const PreferredSize(
+                preferredSize: Size.fromHeight(1),
+                child: Divider(height: 1, color: Color(0xFF333333)),
+              ),
+              title: const Text(
+                'Altf4 Space',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              iconTheme: const IconThemeData(color: Colors.white),
+            )
+          : null,
+          
+      drawer: isMobile ? Drawer(backgroundColor: const Color(0xFF1E1E1E), child: _buildSidebar()) : null,
+      
+      body: Row(
+        children: [
+          if (!isMobile) _buildSidebar(),
+
+          Expanded(
+            child: Column(
+              children: [
+                // Top Search Header
+                if (!isMobile)
+                  Container(
+                    height: 70,
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    decoration: const BoxDecoration(
+                      border: Border(bottom: BorderSide(color: Color(0xFF333333))),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.search, color: Colors.grey.shade500),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Search your files...',
+                          style: TextStyle(color: Colors.grey.shade500, fontSize: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // Chat History
+                Expanded(
+                  child: ListView.builder(
+                    padding: EdgeInsets.all(isMobile ? 16.0 : 32.0),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      return _buildMessageBubble(_messages[index], isMobile);
+                    },
+                  ),
+                ),
+
+                // Dark Input Area
+                Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isMobile ? 16.0 : 32.0, 
+                    vertical: isMobile ? 16.0 : 24.0
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E1E1E), // Dark input background
+                      borderRadius: BorderRadius.circular(24.0),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.2), // Stronger shadow for dark mode
+                          blurRadius: 15,
+                          offset: const Offset(0, 5),
+                        ),
+                      ],
+                      border: Border.all(color: const Color(0xFF333333)),
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 16),
+                        const Icon(Icons.auto_awesome, color: Color(0xFF6366F1)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            controller: _textController,
+                            style: const TextStyle(color: Colors.white), // White typing text
+                            decoration: InputDecoration(
+                              hintText: isMobile ? 'Ask for a file...' : 'Ask for a file, folder, or image...',
+                              hintStyle: TextStyle(color: Colors.grey.shade500),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 18),
+                            ),
+                            onSubmitted: _handleSubmitted,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.send_rounded),
+                          color: const Color(0xFF6366F1),
+                          onPressed: () => _handleSubmitted(_textController.text),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageBubble(Map<String, dynamic> msg, bool isMobile) {
+    final isUser = msg['isUser'];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24.0),
+      child: Row(
+        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!isUser && !isMobile) ...[
+            CircleAvatar(
+              backgroundColor: const Color(0xFF6366F1).withOpacity(0.15),
+              child: const Icon(Icons.memory, color: Color(0xFF6366F1), size: 20),
+            ),
+            const SizedBox(width: 16),
+          ],
+          
+          Flexible(
+            child: Container(
+              constraints: BoxConstraints(maxWidth: isMobile ? 300 : 550),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: isUser ? const Color(0xFF4F46E5) : const Color(0xFF1E1E1E), // Dark system bubble
+                borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(16),
+                  topRight: const Radius.circular(16),
+                  bottomLeft: Radius.circular(isUser ? 16 : 4),
+                  bottomRight: Radius.circular(isUser ? 4 : 16),
+                ),
+                border: isUser ? null : Border.all(color: const Color(0xFF333333)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    msg['text'],
+                    style: const TextStyle(
+                      fontSize: 15,
+                      color: Colors.white, // All text inside bubbles is white now
+                      height: 1.4,
+                    ),
+                  ),
+                  if (msg['type'] == 'file' || msg['type'] == 'image') ...[
+                    const SizedBox(height: 16),
+                    _buildFileAttachment(msg, isMobile),
+                  ]
+                ],
+              ),
+            ),
+          ),
+          
+          if (isUser && !isMobile) ...[
+            const SizedBox(width: 16),
+            CircleAvatar(
+              backgroundColor: Colors.grey.shade700,
+              child: const Icon(Icons.person, color: Colors.white, size: 20),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFileAttachment(Map<String, dynamic> msg, bool isMobile) {
+    final isImage = msg['type'] == 'image';
+    
+    return Container(
+      padding: EdgeInsets.all(isMobile ? 8 : 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF121212), // Darker inset for the file card
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF333333)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            height: 48,
+            width: 48,
+            decoration: BoxDecoration(
+              color: isImage ? Colors.purple.withOpacity(0.2) : Colors.red.withOpacity(0.2), // Tinted dark bg
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              isImage ? Icons.image : Icons.picture_as_pdf,
+              color: isImage ? Colors.purple.shade300 : Colors.red.shade300,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  msg['fileName'],
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  msg['fileSize'],
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.download_rounded),
+            iconSize: 20,
+            color: Colors.grey.shade400,
+            onPressed: () {}, 
+          )
+        ],
       ),
     );
   }
