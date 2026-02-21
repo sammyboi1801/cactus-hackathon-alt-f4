@@ -1,5 +1,9 @@
 # Local-First Android Agent
 
+
+https://github.com/user-attachments/assets/d01b0b31-08e6-4067-9e60-08943190633d
+
+
 ## Project Overview
 
 This project showcases a cutting-edge, local-first agentic workflow designed for Android devices, leveraging **Flutter** for a cross-platform UI and the **Cactus Compute SDK** for on-device AI inference. It demonstrates a sophisticated two-stage "Router-Solver" architecture that redefines the edge-cloud frontier by prioritizing privacy, speed, and efficiency through intelligent, on-device model routing and execution.
