@@ -1,4 +1,4 @@
-import 'dart:ui'; // Required for ImageFilter.blur
+import 'dart:ui';
 import 'package:flutter/material.dart';
 
 void main() {
@@ -11,11 +11,11 @@ class FileChatApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'ALT+F4',
+      title: 'FxnGemma Workspace',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0F0F13), // Deeper, richer dark background
+        scaffoldBackgroundColor: const Color(0xFF0F0F13),
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF6366F1),
           brightness: Brightness.dark,
@@ -40,38 +40,41 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
   final ScrollController _scrollController = ScrollController();
   final List<Map<String, dynamic>> _messages = [];
 
+  // ==========================================
+  // HACKATHON MOCK BACKEND (GP -> FxnGemma)
+  // ==========================================
   void _handleSubmitted(String text) {
     if (text.trim().isEmpty) return;
 
     _textController.clear();
 
     setState(() {
-      _messages.add({
-        'isUser': true,
-        'text': text,
-        'type': 'text',
-      });
+      // 1. User sends message to GP
+      _messages.add({'isUser': true, 'text': text, 'type': 'text'});
 
-      if (text.toLowerCase().contains('image')) {
+      // 2. FxnGemma routes the request based on context
+      if (text.toLowerCase().contains('image') || text.toLowerCase().contains('photo')) {
+        // Simulates FxnGemma calling photo(args) -> DB Photo
         _messages.add({
           'isUser': false,
-          'text': 'I found this image in your "Design" folder:',
+          'text': 'Here is the image from the photo database:',
           'type': 'image',
-          'fileName': 'hero_background.png',
-          'fileSize': '2.4 MB',
+          // Using a placeholder image for the hackathon UI demo
+          'imageUrl': 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop', 
         });
       } else {
+        // Simulates FxnGemma calling file(args) -> DB Files
         _messages.add({
           'isUser': false,
-          'text': 'Here is the document you requested:',
+          'text': 'I retrieved this file from the database:',
           'type': 'file',
-          'fileName': 'Q3_Financial_Report.pdf',
-          'fileSize': '845 KB',
+          'fileName': 'FxnGemma_Architecture.pdf',
+          'fileSize': '1.2 MB',
         });
       }
     });
 
-    // Auto-scroll to the bottom when a new message is added
+    // Auto-scroll to bottom
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -83,46 +86,76 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     });
   }
 
+  // ==========================================
+  // FEATURE: FULL SCREEN IMAGE VIEWER
+  // ==========================================
+  void _showExpandedImage(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(10),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Backdrop filter to blur the chat behind the image
+            BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: const SizedBox.expand(),
+            ),
+            // Interactive viewer allows pinch-to-zoom on iOS/Android!
+            InteractiveViewer(
+              panEnabled: true,
+              minScale: 0.5,
+              maxScale: 4.0,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.network(imageUrl, fit: BoxFit.contain),
+              ),
+            ),
+            // Close button
+            Positioned(
+              top: 20,
+              right: 20,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==========================================
+  // UI BUILDERS
+  // ==========================================
   Widget _buildSidebar() {
     return Container(
       width: 260,
       decoration: const BoxDecoration(
         color: Color(0xFF16161A), 
-        border: Border(
-          right: BorderSide(color: Color(0xFF2A2A35), width: 1), 
-        ),
+        border: Border(right: BorderSide(color: Color(0xFF2A2A35), width: 1)),
       ),
       child: Column(
         children: [
           Container(
-            padding: const EdgeInsets.only(top: 40, left: 24, right: 24, bottom: 24),
+            padding: const EdgeInsets.only(top: 60, left: 24, right: 24, bottom: 24),
             alignment: Alignment.centerLeft,
             child: Row(
               children: [
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    gradient: const LinearGradient(colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
                     borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF6366F1).withOpacity(0.4),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
-                      )
-                    ]
+                    boxShadow: [BoxShadow(color: const Color(0xFF6366F1).withOpacity(0.4), blurRadius: 8)]
                   ),
                   child: const Icon(Icons.hub, color: Colors.white, size: 20),
                 ),
                 const SizedBox(width: 12),
-                const Text(
-                  'Altf4 Space',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 0.5),
-                ),
+                const Text('GP Console', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
               ],
             ),
           ),
@@ -130,43 +163,12 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 12.0),
               children: [
-                _buildSidebarItem(Icons.folder_open, 'All Projects', true),
-                _buildSidebarItem(Icons.image_outlined, 'Assets & Images', false),
-                _buildSidebarItem(Icons.description_outlined, 'Documents', false),
-                _buildSidebarItem(Icons.code, 'Source Code', false),
+                _buildSidebarItem(Icons.chat_bubble_outline, 'General Purpose', true),
+                _buildSidebarItem(Icons.folder_open, 'DB: Files', false),
+                _buildSidebarItem(Icons.image_outlined, 'DB: Photos', false),
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.all(16.0),
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Color(0xFF2A2A35))),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFFEC4899), Color(0xFF8B5CF6)],
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFFEC4899).withOpacity(0.3),
-                        blurRadius: 8,
-                      )
-                    ]
-                  ),
-                  child: const CircleAvatar(
-                    backgroundColor: Colors.transparent,
-                    child: Text('GT', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Text('Galgotiya', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-              ],
-            ),
-          )
         ],
       ),
     );
@@ -182,39 +184,21 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
       ),
       child: ListTile(
         leading: Icon(icon, color: isSelected ? Colors.white : Colors.grey.shade500, size: 22),
-        title: Text(
-          title,
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.grey.shade500,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-            fontSize: 14,
-          ),
-        ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        onTap: () {},
+        title: Text(title, style: TextStyle(color: isSelected ? Colors.white : Colors.grey.shade500, fontSize: 14)),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final isMobile = screenWidth < 800;
+    final isMobile = MediaQuery.of(context).size.width < 800;
 
     return Scaffold(
       appBar: isMobile
           ? AppBar(
               backgroundColor: const Color(0xFF16161A),
-              surfaceTintColor: Colors.transparent,
               elevation: 0,
-              bottom: const PreferredSize(
-                preferredSize: Size.fromHeight(1),
-                child: Divider(height: 1, color: Color(0xFF2A2A35)),
-              ),
-              title: const Text(
-                'Altf4 Space',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-              ),
+              title: const Text('GP Console', style: TextStyle(color: Colors.white, fontSize: 16)),
               iconTheme: const IconThemeData(color: Colors.white),
             )
           : null,
@@ -225,11 +209,9 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
           Expanded(
             child: Stack(
               children: [
-                // 1. Chat History ListView
                 Positioned.fill(
                   child: ListView.builder(
                     controller: _scrollController,
-                    // Add massive bottom padding so the last message isn't hidden behind the floating input
                     padding: EdgeInsets.only(
                       left: isMobile ? 16.0 : 32.0,
                       right: isMobile ? 16.0 : 32.0,
@@ -237,32 +219,23 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
                       bottom: 120.0, 
                     ),
                     itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      return _buildMessageBubble(_messages[index], isMobile);
-                    },
+                    itemBuilder: (context, index) => _buildMessageBubble(_messages[index], isMobile),
                   ),
                 ),
-
-                // 2. Glassmorphism Floating Input Area
                 Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
+                  bottom: 0, left: 0, right: 0,
                   child: ClipRRect(
                     child: BackdropFilter(
                       filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                       child: Container(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: isMobile ? 16.0 : 32.0, 
-                          vertical: isMobile ? 16.0 : 24.0
-                        ),
+                        padding: EdgeInsets.symmetric(horizontal: isMobile ? 16.0 : 32.0, vertical: isMobile ? 16.0 : 24.0),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF0F0F13).withOpacity(0.6), // Translucent backdrop
+                          color: const Color(0xFF0F0F13).withOpacity(0.6),
                           border: Border(top: BorderSide(color: Colors.white.withOpacity(0.05))),
                         ),
                         child: Container(
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.05), // Frosted glass input box
+                            color: Colors.white.withOpacity(0.05),
                             borderRadius: BorderRadius.circular(30.0),
                             border: Border.all(color: Colors.white.withOpacity(0.1)),
                           ),
@@ -276,7 +249,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
                                   controller: _textController,
                                   style: const TextStyle(color: Colors.white),
                                   decoration: InputDecoration(
-                                    hintText: isMobile ? 'Ask for a file...' : 'Ask for a file, folder, or image...',
+                                    hintText: 'Prompt GP to call FxnGemma...',
                                     hintStyle: TextStyle(color: Colors.grey.shade500),
                                     border: InputBorder.none,
                                     contentPadding: const EdgeInsets.symmetric(vertical: 18),
@@ -284,26 +257,11 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
                                   onSubmitted: _handleSubmitted,
                                 ),
                               ),
-                              Container(
-                                margin: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: const LinearGradient(
-                                    colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: const Color(0xFF6366F1).withOpacity(0.3),
-                                      blurRadius: 8,
-                                    )
-                                  ]
-                                ),
-                                child: IconButton(
-                                  icon: const Icon(Icons.send_rounded),
-                                  color: Colors.white,
-                                  onPressed: () => _handleSubmitted(_textController.text),
-                                ),
+                              IconButton(
+                                icon: const Icon(Icons.send_rounded, color: Color(0xFF6366F1)),
+                                onPressed: () => _handleSubmitted(_textController.text),
                               ),
+                              const SizedBox(width: 8),
                             ],
                           ),
                         ),
@@ -311,35 +269,6 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
                     ),
                   ),
                 ),
-                
-                // Top Header (Absolute positioned so it stays at the top)
-                if (!isMobile)
-                  Positioned(
-                    top: 0, left: 0, right: 0,
-                    child: ClipRRect(
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                        child: Container(
-                          height: 70,
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0F0F13).withOpacity(0.6),
-                            border: Border(bottom: BorderSide(color: Colors.white.withOpacity(0.05))),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.search, color: Colors.grey.shade500),
-                              const SizedBox(width: 12),
-                              Text(
-                                'Search your workspace...',
-                                style: TextStyle(color: Colors.grey.shade500, fontSize: 16),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -352,10 +281,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     final isUser = msg['isUser'];
 
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: 24.0, 
-        top: _messages.indexOf(msg) == 0 && !isMobile ? 80.0 : 0 // Push first message down below header
-      ),
+      padding: EdgeInsets.only(bottom: 24.0, top: _messages.indexOf(msg) == 0 && !isMobile ? 20.0 : 0),
       child: Row(
         mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -378,12 +304,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
               constraints: BoxConstraints(maxWidth: isMobile ? 300 : 550),
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                // User gets a gradient, System gets a frosted glass look
-                gradient: isUser ? const LinearGradient(
-                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ) : null,
+                gradient: isUser ? const LinearGradient(colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]) : null,
                 color: isUser ? null : Colors.white.withOpacity(0.03),
                 borderRadius: BorderRadius.only(
                   topLeft: const Radius.circular(16),
@@ -392,28 +313,22 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
                   bottomRight: Radius.circular(isUser ? 4 : 16),
                 ),
                 border: isUser ? null : Border.all(color: Colors.white.withOpacity(0.08)),
-                boxShadow: isUser ? [
-                  BoxShadow(
-                    color: const Color(0xFF6366F1).withOpacity(0.2),
-                    blurRadius: 15,
-                    offset: const Offset(0, 5),
-                  )
-                ] : null,
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    msg['text'],
-                    style: const TextStyle(
-                      fontSize: 15,
-                      color: Colors.white,
-                      height: 1.4,
-                    ),
-                  ),
-                  if (msg['type'] == 'file' || msg['type'] == 'image') ...[
+                  Text(msg['text'], style: const TextStyle(fontSize: 15, color: Colors.white, height: 1.4)),
+                  
+                  // ROUTE: Render Document
+                  if (msg['type'] == 'file') ...[
                     const SizedBox(height: 16),
-                    _buildFileAttachment(msg, isMobile),
+                    _buildClickableFile(msg, isMobile),
+                  ],
+
+                  // ROUTE: Render Image
+                  if (msg['type'] == 'image') ...[
+                    const SizedBox(height: 16),
+                    _buildClickableImage(msg['imageUrl']),
                   ]
                 ],
               ),
@@ -424,66 +339,94 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     );
   }
 
-  Widget _buildFileAttachment(Map<String, dynamic> msg, bool isMobile) {
-    final isImage = msg['type'] == 'image';
-    
-    return Container(
-      padding: EdgeInsets.all(isMobile ? 8 : 12),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.2), // Darker inset
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            height: 48,
-            width: 48,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: isImage 
-                  ? [Colors.purple.shade400.withOpacity(0.2), Colors.purple.shade600.withOpacity(0.2)]
-                  : [Colors.red.shade400.withOpacity(0.2), Colors.red.shade600.withOpacity(0.2)],
+  // FEATURE 1: CLICKABLE FILE
+  Widget _buildClickableFile(Map<String, dynamic> msg, bool isMobile) {
+    return GestureDetector(
+      onTap: () {
+        // Handle file click! For hackathon, we show a snackbar.
+        // You can replace this with code to download or open the file.
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Opening ${msg['fileName']}...'),
+            backgroundColor: const Color(0xFF6366F1),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      },
+      child: Container(
+        padding: EdgeInsets.all(isMobile ? 8 : 12),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.2), 
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              height: 48, width: 48,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [Colors.red.shade400.withOpacity(0.2), Colors.red.shade600.withOpacity(0.2)]),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.red.withOpacity(0.3)),
               ),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: isImage ? Colors.purple.withOpacity(0.3) : Colors.red.withOpacity(0.3)),
+              child: Icon(Icons.picture_as_pdf, color: Colors.red.shade300),
             ),
-            child: Icon(
-              isImage ? Icons.image : Icons.picture_as_pdf,
-              color: isImage ? Colors.purple.shade300 : Colors.red.shade300,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(msg['fileName'], style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white), overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 4),
+                  Text(msg['fileSize'], style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
+                ],
+              ),
             ),
+            Icon(Icons.open_in_new, color: Colors.grey.shade400, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // FEATURE 2: CLICKABLE IMAGE THAT ENLARGES
+  Widget _buildClickableImage(String imageUrl) {
+    return GestureDetector(
+      onTap: () => _showExpandedImage(context, imageUrl),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 10, offset: const Offset(0, 4))],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Image.network(
+                imageUrl, 
+                height: 200, 
+                width: double.infinity, 
+                fit: BoxFit.cover,
+                // Loading builder makes it look professional if the internet is slow during the demo
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return const SizedBox(
+                    height: 200, 
+                    child: Center(child: CircularProgressIndicator(color: Color(0xFF8B5CF6)))
+                  );
+                },
+              ),
+              // Add a subtle magnifying glass icon overlay
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+                child: const Icon(Icons.zoom_in, color: Colors.white, size: 24),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  msg['fileName'],
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  msg['fileSize'],
-                  style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.05),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: IconButton(
-              icon: const Icon(Icons.download_rounded),
-              iconSize: 20,
-              color: Colors.white,
-              onPressed: () {}, 
-            ),
-          )
-        ],
+        ),
       ),
     );
   }
