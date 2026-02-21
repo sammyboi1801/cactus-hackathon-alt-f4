@@ -2,8 +2,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 // ── Planner imports ────────────────────────────────────────────────────────
-import 'planner/planner_pipeline.dart';
-import 'planner/planner_intent_types.dart';
+import 'planner/agent_pipeline.dart';
+import 'planner/agent_service.dart';
+
 
 void main() {
   runApp(const FileChatApp());
@@ -45,7 +46,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
   final List<Map<String, dynamic>> _messages = [];
 
   // ── Planner pipeline ──────────────────────────────────────────────────────
-  final PlannerPipeline _planner = PlannerPipeline();
+  final AgentPipeline _planner = AgentPipeline();
   bool _plannerReady = false;
   double? _downloadProgress;
   String _statusMessage = 'Starting up...';
@@ -72,7 +73,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
       setState(() {
         _downloadProgress = s.downloadProgress;
         _statusMessage = s.statusMessage ?? '';
-        _plannerReady = s.status == PlannerPipelineStatus.ready;
+        _plannerReady = s.status == AgentPipelineStatus.ready;
       });
     });
 
@@ -91,100 +92,87 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     });
     _scrollToBottom();
 
-    // ── Stage 1: Planner ────────────────────────────────────────────────────
-    final result = await _planner.plan(text);
-    final output = result.plannerOutput;
+    // ── Agent: FunctionGemma (tool) → Qwen3-1.7b (conversation) ──────────────
+    final response = await _planner.process(text);
 
     setState(() {
-      // Remove the thinking bubble
       _messages.removeWhere((m) => m['type'] == 'thinking');
 
-      // Always show the planner's chat response first
-      _messages.add({
-        'isUser': false,
-        'text': output.chatResponse,
-        'type': 'text',
-        'intent': output.intent.name,
-        'confidence': output.confidence,
-      });
+      if (response.type == AgentResponseType.conversation) {
+        // Qwen3-1.7b handled it — plain conversational reply
+        _messages.add({
+          'isUser': false,
+          'text': response.chatMessage,
+          'type': 'text',
+        });
+      } else {
+        // FunctionGemma called a tool
+        _messages.add({
+          'isUser': false,
+          'text': response.chatMessage, // ack message e.g. "Searching for resume..."
+          'type': 'text',
+        });
 
-      // ── Route based on intent ─────────────────────────────────────────────
-      // If no tools needed (user_question / unclear) we're done.
-      // Otherwise render a mock result card representing what Stage 2 would return.
-      // Replace the mock blocks below with real Stage 2 calls when ready.
-      if (output.requiresToolExecution) {
-        switch (output.intent) {
-          case PlannerIntent.fileSearch:
-            _messages.add(_buildFileMockResult(output));
-          case PlannerIntent.photoSearch:
-            _messages.add(_buildPhotoMockResult(output));
-          case PlannerIntent.automation:
-            _messages.add(_buildAutomationMockResult(output));
-          case PlannerIntent.clipboardAction:
-            _messages.add(_buildClipboardMockResult(output));
-          default:
-            // Other tool intents: show a generic tool-call card
-            _messages.add(_buildGenericToolCard(output));
-        }
+        // Show tool result card based on which tool was called
+        _messages.add(_buildToolResultCard(response));
       }
     });
 
     _scrollToBottom();
   }
 
-  // ── Mock Stage 2 result builders ─────────────────────────────────────────
-  // These simulate what Stage 2 (FunctionGemma) would return after executing
-  // the selected tool. Replace with real tool calls when Stage 2 is ready.
+  // ── Build result card based on tool name ─────────────────────────────────
 
-  Map<String, dynamic> _buildFileMockResult(PlannerOutput output) {
-    final query = output.arguments['query'] ?? 'document';
-    return {
-      'isUser': false,
-      'text': 'Found the most relevant file for "$query":',
-      'type': 'file',
-      'fileName': '${query}_2024.pdf',
-      'fileSize': '842 KB',
-      'toolUsed': output.candidateTools.isNotEmpty ? output.candidateTools.first : 'search_files_semantic',
-    };
-  }
+  Map<String, dynamic> _buildToolResultCard(AgentResponse response) {
+    final tool = response.toolName ?? '';
+    final args = response.toolArguments ?? {};
 
-  Map<String, dynamic> _buildPhotoMockResult(PlannerOutput output) {
-    return {
-      'isUser': false,
-      'text': 'Here is the closest matching photo:',
-      'type': 'image',
-      'imageUrl': 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop',
-      'toolUsed': 'search_photos_semantic',
-    };
-  }
+    if (tool.startsWith('search_files')) {
+      final query = args['query'] ?? args['mime_type'] ?? 'document';
+      return {
+        'isUser': false,
+        'text': 'Best match for "$query":',
+        'type': 'file',
+        'fileName': '${query}_2024.pdf',
+        'fileSize': '842 KB',
+        'toolUsed': tool,
+      };
+    }
 
-  Map<String, dynamic> _buildAutomationMockResult(PlannerOutput output) {
-    final toolsRan = output.candidateTools.join(', ');
+    if (tool.startsWith('search_photos')) {
+      return {
+        'isUser': false,
+        'text': 'Closest matching photo:',
+        'type': 'image',
+        'imageUrl': 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop',
+        'toolUsed': tool,
+      };
+    }
+
+    if (tool.startsWith('toggle_') || tool == 'open_app' || tool == 'get_battery_status') {
+      return {
+        'isUser': false,
+        'text': 'Done.',
+        'type': 'automation',
+        'toolsRan': tool,
+        'arguments': args,
+      };
+    }
+
+    if (tool == 'read_clipboard') {
+      return {
+        'isUser': false,
+        'text': 'Clipboard contents:',
+        'type': 'clipboard',
+        'content': '— clipboard read placeholder —',
+      };
+    }
+
     return {
       'isUser': false,
       'text': 'Done.',
-      'type': 'automation',
-      'toolsRan': toolsRan,
-      'arguments': output.arguments,
-    };
-  }
-
-  Map<String, dynamic> _buildClipboardMockResult(PlannerOutput output) {
-    return {
-      'isUser': false,
-      'text': 'Clipboard contents:',
-      'type': 'clipboard',
-      'content': '— clipboard read placeholder —',
-    };
-  }
-
-  Map<String, dynamic> _buildGenericToolCard(PlannerOutput output) {
-    return {
-      'isUser': false,
-      'text': 'Tool executed.',
       'type': 'tool_result',
-      'toolsRan': output.candidateTools.join(', '),
-      'reasoning': output.reasoningSummary,
+      'toolsRan': tool,
     };
   }
 
@@ -400,113 +388,260 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
   Widget build(BuildContext context) {
     final isMobile = MediaQuery.of(context).size.width < 800;
 
-    return SafeArea(
-      child: Scaffold(
-        appBar: isMobile
-            ? AppBar(
-                backgroundColor: const Color(0xFF16161A),
-                elevation: 0,
-                title: const Text('GP Console',
-                    style: TextStyle(color: Colors.white, fontSize: 16)),
-                iconTheme: const IconThemeData(color: Colors.white),
-              )
-            : null,
-        drawer: isMobile
-            ? Drawer(
-                backgroundColor: const Color(0xFF16161A),
-                child: _buildSidebar())
-            : null,
-        body: Row(
-          children: [
-            if (!isMobile) _buildSidebar(),
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: _messages.isEmpty && !_plannerReady
-                        ? _buildLoadingScreen()
-                        : ListView.builder(
-                            controller: _scrollController,
-                            padding: EdgeInsets.only(
-                              left: isMobile ? 16.0 : 32.0,
-                              right: isMobile ? 16.0 : 32.0,
-                              top: isMobile ? 16.0 : 32.0,
-                              bottom: 120.0,
-                            ),
-                            itemCount: _messages.length,
-                            itemBuilder: (context, index) =>
-                                _buildMessageBubble(_messages[index], isMobile),
+    return Scaffold(
+      appBar: isMobile
+          ? AppBar(
+              backgroundColor: const Color(0xFF16161A),
+              elevation: 0,
+              title: const Text('GP Console',
+                  style: TextStyle(color: Colors.white, fontSize: 16)),
+              iconTheme: const IconThemeData(color: Colors.white),
+            )
+          : null,
+      drawer: isMobile
+          ? Drawer(
+              backgroundColor: const Color(0xFF16161A),
+              child: _buildSidebar())
+          : null,
+      body: Row(
+        children: [
+          if (!isMobile) _buildSidebar(),
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: _messages.isEmpty && !_plannerReady
+                      ? _buildLoadingScreen()
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: EdgeInsets.only(
+                            left: isMobile ? 16.0 : 32.0,
+                            right: isMobile ? 16.0 : 32.0,
+                            top: isMobile ? 16.0 : 32.0,
+                            bottom: 120.0,
                           ),
-                  ),
-                  // ── Input bar ─────────────────────────────────────────────
-                  Positioned(
-                    bottom: 0, left: 0, right: 0,
-                    child: ClipRRect(
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                          itemCount: _messages.length,
+                          itemBuilder: (context, index) =>
+                              _buildMessageBubble(_messages[index], isMobile),
+                        ),
+                ),
+                // ── Input bar ─────────────────────────────────────────────
+                Positioned(
+                  bottom: 0, left: 0, right: 0,
+                  child: ClipRRect(
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: isMobile ? 16.0 : 32.0,
+                            vertical: isMobile ? 16.0 : 24.0),
+                        decoration: BoxDecoration(
+                          color:
+                              const Color(0xFF0F0F13).withOpacity(0.6),
+                          border: Border(
+                              top: BorderSide(
+                                  color: Colors.white.withOpacity(0.05))),
+                        ),
                         child: Container(
-                          padding: EdgeInsets.symmetric(
-                              horizontal: isMobile ? 16.0 : 32.0,
-                              vertical: isMobile ? 16.0 : 24.0),
                           decoration: BoxDecoration(
-                            color:
-                                const Color(0xFF0F0F13).withOpacity(0.6),
-                            border: Border(
-                                top: BorderSide(
-                                    color: Colors.white.withOpacity(0.05))),
+                            color: _plannerReady
+                                ? Colors.white.withOpacity(0.05)
+                                : Colors.white.withOpacity(0.02),
+                            borderRadius: BorderRadius.circular(30.0),
+                            border: Border.all(
+                                color: Colors.white.withOpacity(0.1)),
                           ),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: _plannerReady
-                                  ? Colors.white.withOpacity(0.05)
-                                  : Colors.white.withOpacity(0.02),
-                              borderRadius: BorderRadius.circular(30.0),
-                              border: Border.all(
-                                  color: Colors.white.withOpacity(0.1)),
-                            ),
-                            child: Row(
-                              children: [
-                                const SizedBox(width: 20),
-                                Icon(Icons.auto_awesome,
-                                    color: _plannerReady
-                                        ? const Color(0xFF8B5CF6)
-                                        : Colors.grey.shade700),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: TextField(
-                                    controller: _textController,
-                                    enabled: _plannerReady,
-                                    style: const TextStyle(color: Colors.white),
-                                    decoration: InputDecoration(
-                                      hintText: _plannerReady
-                                          ? 'Ask your assistant...'
-                                          : _statusMessage,
-                                      hintStyle: TextStyle(
-                                          color: Colors.grey.shade500),
-                                      border: InputBorder.none,
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                              vertical: 18),
-                                    ),
-                                    onSubmitted: _handleSubmitted,
+                          child: Row(
+                            children: [
+                              const SizedBox(width: 20),
+                              Icon(Icons.auto_awesome,
+                                  color: _plannerReady
+                                      ? const Color(0xFF8B5CF6)
+                                      : Colors.grey.shade700),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: TextField(
+                                  controller: _textController,
+                                  enabled: _plannerReady,
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: InputDecoration(
+                                    hintText: _plannerReady
+                                        ? 'Ask your assistant...'
+                                        : _statusMessage,
+                                    hintStyle: TextStyle(
+                                        color: Colors.grey.shade500),
+                                    border: InputBorder.none,
+                                    contentPadding:
+                                        const EdgeInsets.symmetric(
+                                            vertical: 18),
                                   ),
+                                  onSubmitted: _handleSubmitted,
                                 ),
-                                IconButton(
-                                  icon: Icon(Icons.send_rounded,
-                                      color: _plannerReady
-                                          ? const Color(0xFF6366F1)
-                                          : Colors.grey.shade700),
-                                  onPressed: _plannerReady
-                                      ? () =>
-                                          _handleSubmitted(_textController.text)
-                                      : null,
-                                ),
-                                const SizedBox(width: 8),
-                              ],
-                            ),
+                              ),
+                              IconButton(
+                                icon: Icon(Icons.send_rounded,
+                                    color: _plannerReady
+                                        ? const Color(0xFF6366F1)
+                                        : Colors.grey.shade700),
+                                onPressed: _plannerReady
+                                    ? () =>
+                                        _handleSubmitted(_textController.text)
+                                    : null,
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                           ),
                         ),
                       ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Full-screen loading / download state ─────────────────────────────────
+  Widget _buildLoadingScreen() {
+    final isDownloading = _downloadProgress != null;
+    final percent = ((_downloadProgress ?? 0) * 100).toStringAsFixed(0);
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Icon
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                    colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                      color: const Color(0xFF6366F1).withOpacity(0.3),
+                      blurRadius: 20)
+                ],
+              ),
+              child: Icon(
+                isDownloading ? Icons.download : Icons.memory,
+                color: Colors.white,
+                size: 36,
+              ),
+            ),
+            const SizedBox(height: 28),
+
+            // Title
+            Text(
+              isDownloading ? 'Downloading Model' : 'Initializing Model',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+
+            // Status message (e.g. "Downloading qwen3-0.6b...")
+            Text(
+              _statusMessage,
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+
+            // ── Download progress bar ─────────────────────────────────────
+            if (isDownloading) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Progress',
+                      style: TextStyle(
+                          color: Colors.grey.shade500, fontSize: 12)),
+                  Text('$percent%',
+                      style: const TextStyle(
+                          color: Color(0xFF8B5CF6),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: _downloadProgress,
+                  backgroundColor: Colors.white.withOpacity(0.06),
+                  valueColor: const AlwaysStoppedAnimation<Color>(
+                      Color(0xFF6366F1)),
+                  minHeight: 12,
+                ),
+              ),
+              const SizedBox(height: 10),
+              // MB downloaded / total
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '${((_downloadProgress ?? 0) * _modelTotalMb).toStringAsFixed(0)} MB',
+                    style: TextStyle(
+                        color: Colors.grey.shade500, fontSize: 11),
+                  ),
+                  Text(
+                    '~$_modelTotalMb MB total',
+                    style: TextStyle(
+                        color: Colors.grey.shade600, fontSize: 11),
+                  ),
+                ],
+              ),
+            ] else ...[
+              // Indeterminate spinner while model initializes (post-download)
+              const SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2.5, color: Color(0xFF8B5CF6)),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Loading weights into memory...',
+                style:
+                    TextStyle(color: Colors.grey.shade500, fontSize: 12),
+              ),
+              Text(
+                'Takes ~10–20s on first run',
+                style:
+                    TextStyle(color: Colors.grey.shade700, fontSize: 11),
+              ),
+            ],
+
+            const SizedBox(height: 32),
+
+            // Info footer
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.info_outline,
+                      color: Colors.grey.shade600, size: 14),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      isDownloading
+                          ? 'Downloaded once — cached on device after this'
+                          : 'Model stays loaded between conversations',
+                      style: TextStyle(
+                          color: Colors.grey.shade600, fontSize: 11),
                     ),
                   ),
                 ],
@@ -518,69 +653,11 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     );
   }
 
-  // ── Full-screen loading state (before model ready) ────────────────────────
-  Widget _buildLoadingScreen() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)]),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                    color: const Color(0xFF6366F1).withOpacity(0.3),
-                    blurRadius: 20)
-              ],
-            ),
-            child: const Icon(Icons.memory, color: Colors.white, size: 36),
-          ),
-          const SizedBox(height: 24),
-          Text('Loading Planner Model',
-              style: TextStyle(
-                  color: Colors.grey.shade300,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text(_statusMessage,
-              style:
-                  TextStyle(color: Colors.grey.shade500, fontSize: 13)),
-          if (_downloadProgress != null) ...[
-            const SizedBox(height: 20),
-            SizedBox(
-              width: 240,
-              child: LinearProgressIndicator(
-                value: _downloadProgress,
-                backgroundColor: Colors.white.withOpacity(0.05),
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                    Color(0xFF6366F1)),
-                minHeight: 3,
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '${((_downloadProgress ?? 0) * 100).toStringAsFixed(0)}%',
-              style: TextStyle(
-                  color: Colors.grey.shade500, fontSize: 12),
-            ),
-          ] else
-            const Padding(
-              padding: EdgeInsets.only(top: 20),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Color(0xFF8B5CF6)),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  /// Change this to match your model slug:
+  ///   gemma3-270m  → 270
+  ///   qwen3-0.6b   → 400
+  ///   qwen3-1.7b   → 1100
+  static const int _modelTotalMb = 400;
 
   // ── Message bubble dispatcher ─────────────────────────────────────────────
   Widget _buildMessageBubble(Map<String, dynamic> msg, bool isMobile) {
