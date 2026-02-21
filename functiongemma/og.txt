@@ -1,0 +1,344 @@
+import sys
+sys.path.insert(0, "cactus/python/src")
+functiongemma_path = "cactus/weights/functiongemma-270m-it"
+
+import json
+import os
+import time
+import re
+from difflib import SequenceMatcher
+from cactus import cactus_init, cactus_complete, cactus_reset, cactus_destroy
+from google import genai
+from google.genai import types
+
+##############################################################
+# GLOBAL MODEL CACHE
+##############################################################
+CACTUS_MODEL = None
+def _get_model():
+    global CACTUS_MODEL
+    if CACTUS_MODEL is None:
+        CACTUS_MODEL = cactus_init(functiongemma_path)
+    return CACTUS_MODEL
+
+RESERVED_WORDS = {'to', 'the', 'at', 'in', 'of', 'and', 'saying', 'say', 'text', 'message', 'check', 'current', 'weather', 'is', 'for', 'about', 'find', 'search', 'look', 'up', 'contact', 'contacts', 'send', 'tell', 'give', 'me', 'set', 'play', 'get', 'what', 'how', 'a', 'an', 'some', 'any', 'my', 'me', 'him', 'her', 'them', 'wake', 'up', 'reminder', 'remind'}
+
+##############################################################
+# RECOVERY & POST-PROCESSING
+##############################################################
+def _extract_json_blocks(s):
+    if not s: return []
+    s = s.replace('：', ':').replace('，', ',').replace('"', '"').replace('"', '"')
+    s = s.replace('<escape>', '').replace('<|im_end|>', '').replace('<end_of_turn>', '')
+    blocks = []
+    brace_stack = []
+    start = -1
+    for i, char in enumerate(s):
+        if char == '{':
+            if not brace_stack: start = i
+            brace_stack.append('{')
+        elif char == '}':
+            if brace_stack:
+                brace_stack.pop()
+                if not brace_stack: blocks.append(s[start:i+1])
+    return blocks
+
+def _robust_parse(raw_str):
+    blocks = _extract_json_blocks(raw_str)
+    calls = []
+    for b in blocks:
+        try:
+            data = json.loads(b)
+            if "function_calls" in data: calls.extend(data["function_calls"])
+            elif "name" in data: calls.append(data)
+        except:
+            try:
+                fixed = re.sub(r':\s*([a-zA-Z0-9_\-\.]+)\s*([,}])', r':"\1"\2', b)
+                data = json.loads(fixed)
+                if "function_calls" in data: calls.extend(data["function_calls"])
+                elif "name" in data: calls.append(data)
+            except: pass
+    return {"function_calls": calls} if calls else None
+
+def _fuzzy_match(query, choices, threshold=0.25):
+    if not query or not choices: return None
+    query = str(query).lower().strip()
+    best_match = None
+    max_score = 0
+    for choice in choices:
+        score = SequenceMatcher(None, query, choice.lower()).ratio()
+        if query in choice.lower() or choice.lower() in query: score = max(score, 0.8)
+        if score > max_score: max_score = score; best_match = choice
+    return best_match if max_score >= threshold else None
+
+def _fix_call(call, tool_map, user_request, raw_output):
+    if not isinstance(call, dict): return None
+    matched_name = _fuzzy_match(call.get('name'), tool_map.keys())
+    if not matched_name: return None
+    
+    # Tool specific forced mapping for common failures
+    if 'timer' in user_request.lower() and matched_name == 'set_alarm':
+        matched_name = 'set_timer'
+    
+    tool_def = tool_map[matched_name]
+    props = tool_def.get('parameters', {}).get('properties', {})
+    raw_args = call.get('arguments', {})
+    if not isinstance(raw_args, dict): raw_args = {}
+    
+    fixed_args = {}
+    for k, v in raw_args.items():
+        if isinstance(v, dict) and v: v = list(v.values())[0]
+        matched_k = _fuzzy_match(k, list(props.keys()), threshold=0.1)
+        if matched_k:
+            fixed_args[matched_k] = _coerce(v, props[matched_k].get('type'), matched_k, user_request)
+            
+    # Required recovery
+    required = tool_def.get('parameters', {}).get('required', [])
+    for req in required:
+        should_scavenge = False
+        val_s = str(fixed_args.get(req, ""))
+        
+        if req not in fixed_args or fixed_args[req] is None:
+            should_scavenge = True
+        elif req == 'minute' and fixed_args[req] == 0 and ':' in user_request:
+            should_scavenge = True
+        elif req == 'hour' and fixed_args[req] == 0 and ('AM' in user_request.upper() or 'PM' in user_request.upper()):
+            should_scavenge = True
+        elif req in ['recipient', 'location', 'query', 'song', 'title', 'message']:
+            words = val_s.lower().split()
+            hallucinated = any(w not in user_request.lower() and w not in RESERVED_WORDS for w in words)
+            if hallucinated or len(val_s) < 2 or val_s.lower() in RESERVED_WORDS or val_s.lower() not in user_request.lower():
+                should_scavenge = True
+        elif req == 'minutes' and (fixed_args[req] == 0 or str(fixed_args[req]) not in user_request):
+            should_scavenge = True
+            
+        if should_scavenge:
+            val = _scavenge_param(user_request, req, props[req].get('type'), matched_name)
+            if val is not None: fixed_args[req] = val
+                
+    return {"name": matched_name, "arguments": fixed_args}
+
+def _coerce(v, t, k, user_request):
+    if t in ['integer', 'number']:
+        s_val = str(v)
+        if k == 'minute' and ':' not in s_val and not re.search(r':\d{2}', user_request):
+            return 0
+        if k == 'hour' or k == 'minute':
+            time_match = re.search(r'(\d{1,2}):(\d{2})', s_val)
+            if time_match:
+                if k == 'hour': return int(time_match.group(1))
+                return int(time_match.group(2))
+        nums = re.findall(r'\d+', s_val)
+        if nums: return int(nums[0])
+        return 0
+    s = str(v).strip().strip('"\'').strip('.').strip('[]').strip('"').strip("'")
+    if len(s) > 100: s = s[:100]
+    return s if s else None
+
+def _scavenge_param(text, key, ptype, tool):
+    if ptype in ['integer', 'number']:
+        if tool == 'set_alarm':
+            if key == 'hour':
+                m = re.search(r'(\d{1,2})(?::\d{2})?\s*(?:AM|PM|am|pm)', text, re.I)
+                if m: return int(m.group(1))
+                m = re.search(r'at\s+(\d{1,2})', text, re.I)
+                if m: return int(m.group(1))
+            if key == 'minute':
+                m = re.search(r'\d{1,2}:(\d{2})', text)
+                if m: return int(m.group(1))
+                return 0
+        if tool == 'set_timer':
+            m = re.search(r'(\d+)\s*(?:min|minute)', text, re.I)
+            if m: return int(m.group(1))
+        nums = re.findall(r'\d+', text)
+        if nums: return int(nums[0])
+        return 0
+        
+    patterns = {
+        'location': r'(?:in|at|to|weather for|weather in|of|near|is the weather in|weather like in|about|weather in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
+        'recipient': r'(?:to|text|message|contact)\s+([A-Z][a-z]+)',
+        'query': r'(?:Find|Look up|Search for|search|look up|finding|for)\s+([A-Z][a-z]+)',
+        'title': r'(?:about|to|remind me to|reminder for|to remind me about|to)\s+(.+?)(?:\s+at|$)',
+        'song': r'(?:play|music|Play some)\s+(.+)',
+        'message': r'(?:saying|say|text)\s+(.+)'
+    }
+    if key in patterns:
+        m = re.search(patterns[key], text, re.I)
+        if m:
+            val = m.group(1).strip().strip('.')
+            if val.lower() not in RESERVED_WORDS: return val
+    
+    if key in ['location', 'recipient', 'query']:
+        words = re.findall(r'[A-Z][a-z]+', text)
+        for w in words:
+            if w.lower() not in RESERVED_WORDS: return w
+    return None
+
+##############################################################
+# CLOUD FALLBACK
+##############################################################
+def generate_cloud(messages, tools):
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    
+    gemini_tools = [types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name=t["name"],
+            description=t["description"],
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    k: types.Schema(
+                        type=v["type"].upper(),
+                        description=v.get("description", ""),
+                    )
+                    for k, v in t["parameters"]["properties"].items()
+                },
+                required=t["parameters"].get("required", []),
+            ),
+        ) for t in tools
+    ])]
+    
+    contents = [m["content"] for m in messages if m["role"] == "user"]
+    start = time.time()
+    
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=contents,
+        config=types.GenerateContentConfig(tools=gemini_tools),
+    )
+    
+    total_time = (time.time() - start) * 1000
+    calls = []
+    
+    for c in response.candidates:
+        for part in c.content.parts:
+            if part.function_call:
+                calls.append({
+                    "name": part.function_call.name,
+                    "arguments": dict(part.function_call.args),
+                })
+    
+    return {
+        "function_calls": calls,
+        "total_time_ms": total_time,
+    }
+
+##############################################################
+# PROMPTS
+##############################################################
+SYSTEM_PROMPT = """You are a robotic tool-calling assistant. Respond ONLY with valid JSON.
+Format: {"function_calls": [{"name": "tool_name", "arguments": {"param": "value"}}]}
+RULES:
+1. Provide a JSON object for EVERY action requested.
+2. Use EXACT words and numbers found in the user request.
+3. For "9 AM", hour: 9, minute: 0. "Wake me up at 6 AM" -> set_alarm(hour: 6, minute: 0).
+4. Use 'set_timer' for countdowns/timers, 'set_alarm' for specific times.
+
+EXAMPLES:
+User: Set alarm for 10 AM.
+Assistant: {"function_calls": [{"name": "set_alarm", "arguments": {"hour": 10, "minute": 0}}]}
+
+User: Send 'hi' to Bob and check weather in London.
+Assistant: {"function_calls": [{"name": "send_message", "arguments": {"recipient": "Bob", "message": "hi"}}, {"name": "get_weather", "arguments": {"location": "London"}}]}
+"""
+
+def _get_prompt(tools):
+    desc = "\n".join([f"- {t['name']}: {t['description']} ({list(t['parameters']['properties'].keys())})" for t in tools])
+    return SYSTEM_PROMPT + "\nAVAILABLE TOOLS:\n" + desc
+
+##############################################################
+# CORE
+##############################################################
+def generate_cactus_attempt(messages, tools, expected, temperature=0, top_p=None, top_k=None, hint=None):
+    model = _get_model()
+    cactus_reset(model)
+    msgs = [{"role": "system", "content": _get_prompt(tools)}] + messages
+    if hint: msgs.append({"role": "user", "content": f"IMPORTANT: {hint}"})
+    cactus_tools = [{"type": "function", "function": t} for t in tools]
+    raw_str = cactus_complete(model, msgs, tools=cactus_tools, force_tools=True, temperature=temperature, top_p=top_p, top_k=top_k, max_tokens=192)
+    tool_map = {t['name']: t for t in tools}
+    data = _robust_parse(raw_str)
+    user_req = " ".join([m['content'] for m in messages if m['role'] == 'user'])
+    fixed_calls = []
+    seen = set()
+    if data:
+        for c in data.get('function_calls', []):
+            fixed = _fix_call(c, tool_map, user_req, raw_str)
+            if fixed:
+                sig = json.dumps(fixed, sort_keys=True)
+                if sig not in seen: fixed_calls.append(fixed); seen.add(sig)
+    try:
+        meta = json.loads(raw_str)
+        return {"function_calls": fixed_calls, "confidence": meta.get("confidence", 0.5), "total_time_ms": meta.get("total_time_ms", 0.0)}
+    except:
+        return {"function_calls": fixed_calls, "confidence": 0.5, "total_time_ms": 0}
+
+def generate_hybrid(messages, tools):
+    user_text = " ".join([m['content'] for m in messages if m['role'] == 'user'])
+    expected = 1
+    lower_text = user_text.lower()
+    if any(c in lower_text for c in [" and ", " then ", " also ", " plus ", ", "]): expected = 2
+    if lower_text.count(" and ") + user_text.count(",") >= 2: expected = 3
+    
+    # Pass 1: Deterministic
+    res = generate_cactus_attempt(messages, tools, expected, temperature=0)
+    
+    # Split logic fallback for multi-call (High reliability)
+    if (res["confidence"] < 0.8 or len(res["function_calls"]) < expected) and expected > 1:
+        parts = re.split(r'\s+(?:and|then|also|plus)\s+|,\s+', user_text, flags=re.I)
+        parts = [p.strip() for p in parts if len(p.strip()) > 4]
+        if len(parts) >= expected:
+            split_calls = []
+            split_time = res["total_time_ms"]
+            for p in parts[:expected]:
+                s_res = generate_cactus_attempt([{"role": "user", "content": p}], tools, 1, temperature=0, hint="Extract ONLY ONE action.")
+                if not s_res["function_calls"]:
+                    s_res = generate_cactus_attempt([{"role": "user", "content": p}], tools, 1, temperature=0.7, top_p=0.9, top_k=40)
+                split_calls.extend(s_res["function_calls"])
+                split_time += s_res["total_time_ms"]
+            if len(split_calls) > len(res["function_calls"]):
+                res = {"function_calls": split_calls, "confidence": 0.9, "total_time_ms": split_time}
+                res["source"] = "on-device"
+                return res
+
+    # Stochastic retries if still not confident
+    if res["confidence"] < 0.7 or len(res["function_calls"]) < expected:
+        attempts = [res]
+        for _ in range(2):
+            attempts.append(generate_cactus_attempt(messages, tools, expected, temperature=0.7, top_p=0.9, top_k=40))
+        
+        best_res = res
+        best_score = -100
+        for a in attempts:
+            num = len(a["function_calls"])
+            score = (min(num, expected) * 60) + (a["confidence"] * 10)
+            if num == expected: score += 100
+            if score > best_score:
+                best_score = score
+                best_res = a
+        res = best_res
+        res["total_time_ms"] = sum(a["total_time_ms"] for a in attempts)
+    
+    ##############################################################
+    # CLOUD FALLBACK - Only if stochastic retries fail threshold
+    ##############################################################
+    # Define minimum acceptable thresholds for on-device
+    MIN_CONFIDENCE = 0.6
+    MIN_CALLS_RATIO = 0.7  # At least 70% of expected calls
+    
+    calls_ratio = len(res["function_calls"]) / max(1, expected) if res["function_calls"] else 0
+    
+    # Fallback to cloud if:
+    # 1. Confidence too low AND not enough calls, OR
+    # 2. No function calls at all
+    if (res["confidence"] < MIN_CONFIDENCE and calls_ratio < MIN_CALLS_RATIO) or not res["function_calls"]:
+        cloud = generate_cloud(messages, tools)
+        cloud["source"] = "cloud (fallback)"
+        cloud["total_time_ms"] += res["total_time_ms"]
+        return cloud
+
+    res["source"] = "on-device"
+    return res
+
+if __name__ == "__main__":
+    pass

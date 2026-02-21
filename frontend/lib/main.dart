@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 // ── Planner imports ────────────────────────────────────────────────────────
 import 'planner/agent_pipeline.dart';
 import 'planner/agent_service.dart';
+import 'tools/file_tools.dart';
+import 'tools/photo_tools.dart';
+import 'dart:io';
 
 
 void main() {
@@ -109,32 +112,60 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
         // FunctionGemma called a tool
         _messages.add({
           'isUser': false,
-          'text': response.chatMessage, // ack message e.g. "Searching for resume..."
+          'text': response.chatMessage, // ack message
           'type': 'text',
         });
-
-        // Show tool result card based on which tool was called
-        _messages.add(_buildToolResultCard(response));
       }
     });
-
     _scrollToBottom();
+
+    if (response.type == AgentResponseType.toolResult) {
+      final result = await _executeTool(response);
+      setState(() {
+        _messages.add(_buildToolResultCardFromData(response.toolName!, response.toolArguments ?? {}, result));
+      });
+      _scrollToBottom();
+    }
   }
 
-  // ── Build result card based on tool name ─────────────────────────────────
-
-  Map<String, dynamic> _buildToolResultCard(AgentResponse response) {
-    final tool = response.toolName ?? '';
+  Future<Map<String, dynamic>> _executeTool(AgentResponse response) async {
+    final tool = response.toolName!;
     final args = response.toolArguments ?? {};
 
-    if (tool.startsWith('search_files')) {
-      final query = args['query'] ?? args['mime_type'] ?? 'document';
+    try {
+      if (tool == 'search_files_semantic' || tool == 'search_files_recent') {
+        return await FileTools.searchFilesSemantic(args['query'] ?? '');
+      } else if (tool == 'search_files_by_type') {
+        return await FileTools.searchFilesByMimeType(args['mime_type'] ?? 'application/pdf');
+      } else if (tool == 'search_photos_semantic') {
+        return await PhotoTools.searchPhotosSemantic(args['query'] ?? '');
+      } else if (tool == 'search_photos_by_date') {
+        return await PhotoTools.searchPhotosByDate(args['from_date'] ?? '', args['to_date'] ?? '');
+      }
+      // Add more tools here...
+    } catch (e) {
+      return {'error': e.toString()};
+    }
+    return {'error': 'Tool $tool not implemented'};
+  }
+
+  Map<String, dynamic> _buildToolResultCardFromData(String tool, Map<String, dynamic> args, Map<String, dynamic> result) {
+    if (result.containsKey('error')) {
       return {
         'isUser': false,
-        'text': 'Best match for "$query":',
+        'text': 'Error: ${result['error']}',
+        'type': 'text',
+      };
+    }
+
+    if (tool.startsWith('search_files')) {
+      return {
+        'isUser': false,
+        'text': 'I found this file for you:',
         'type': 'file',
-        'fileName': '${query}_2024.pdf',
-        'fileSize': '842 KB',
+        'fileName': result['fileName'] ?? 'unknown',
+        'fileSize': result['fileSize'] ?? '0 KB',
+        'filePath': result['filePath'],
         'toolUsed': tool,
       };
     }
@@ -142,29 +173,11 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     if (tool.startsWith('search_photos')) {
       return {
         'isUser': false,
-        'text': 'Closest matching photo:',
+        'text': 'Found this photo:',
         'type': 'image',
-        'imageUrl': 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop',
+        'imageUrl': result['filePath'], // Using filePath as imageUrl for local files
+        'isLocal': true,
         'toolUsed': tool,
-      };
-    }
-
-    if (tool.startsWith('toggle_') || tool == 'open_app' || tool == 'get_battery_status') {
-      return {
-        'isUser': false,
-        'text': 'Done.',
-        'type': 'automation',
-        'toolsRan': tool,
-        'arguments': args,
-      };
-    }
-
-    if (tool == 'read_clipboard') {
-      return {
-        'isUser': false,
-        'text': 'Clipboard contents:',
-        'type': 'clipboard',
-        'content': '— clipboard read placeholder —',
       };
     }
 
@@ -190,7 +203,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
   }
 
   // ── Full-screen image viewer ──────────────────────────────────────────────
-  void _showExpandedImage(BuildContext context, String imageUrl) {
+  void _showExpandedImage(BuildContext context, String imageUrl, {bool isLocal = false}) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -209,7 +222,9 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
               maxScale: 4.0,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: Image.network(imageUrl, fit: BoxFit.contain),
+                child: isLocal 
+                  ? Image.file(File(imageUrl), fit: BoxFit.contain)
+                  : Image.network(imageUrl, fit: BoxFit.contain),
               ),
             ),
             Positioned(
@@ -764,7 +779,7 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
                 style: const TextStyle(
                     fontSize: 15, color: Colors.white, height: 1.4)),
             const SizedBox(height: 16),
-            _buildClickableImage(msg['imageUrl'] as String),
+            _buildClickableImage(msg['imageUrl'] as String, isLocal: msg['isLocal'] ?? false),
             if (msg['toolUsed'] != null)
               _buildToolBadge(msg['toolUsed'] as String),
           ],
@@ -947,17 +962,21 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     );
   }
 
-  // ── Clickable file card (unchanged from original) ────────────────────────
+  // ── Clickable file card ────────────────────────
   Widget _buildClickableFile(Map<String, dynamic> msg, bool isMobile) {
     return GestureDetector(
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Opening ${msg['fileName']}...'),
-            backgroundColor: const Color(0xFF6366F1),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+      onTap: () async {
+        if (msg['filePath'] != null) {
+          await FileTools.openFile(msg['filePath']);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Opening ${msg['fileName']}...'),
+              backgroundColor: const Color(0xFF6366F1),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       },
       child: Container(
         padding: EdgeInsets.all(isMobile ? 8 : 12),
@@ -1006,10 +1025,10 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
     );
   }
 
-  // ── Clickable image that enlarges (unchanged from original) ─────────────
-  Widget _buildClickableImage(String imageUrl) {
+  // ── Clickable image that enlarges ─────────────
+  Widget _buildClickableImage(String imageUrl, {bool isLocal = false}) {
     return GestureDetector(
-      onTap: () => _showExpandedImage(context, imageUrl),
+      onTap: () => _showExpandedImage(context, imageUrl, isLocal: isLocal),
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
@@ -1026,20 +1045,27 @@ class _ChatLayoutScreenState extends State<ChatLayoutScreen> {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              Image.network(
-                imageUrl,
-                height: 200,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return const SizedBox(
-                      height: 200,
-                      child: Center(
-                          child: CircularProgressIndicator(
-                              color: Color(0xFF8B5CF6))));
-                },
-              ),
+              isLocal 
+                ? Image.file(
+                    File(imageUrl),
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                  )
+                : Image.network(
+                    imageUrl,
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return const SizedBox(
+                          height: 200,
+                          child: Center(
+                              child: CircularProgressIndicator(
+                                  color: Color(0xFF8B5CF6))));
+                    },
+                  ),
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
